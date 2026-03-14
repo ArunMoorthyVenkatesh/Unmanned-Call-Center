@@ -26,6 +26,9 @@ except ImportError:
 
 import google.generativeai as genai
 from dotenv import load_dotenv
+from voip import router as voip_router
+from appointments_db import init_db, get_all_appointments, update_appointment_status
+from reminders import start_scheduler, stop_scheduler, cancel_reminders
 
 from fastapi import FastAPI, HTTPException, Request, File, UploadFile, Form
 from fastapi.responses import JSONResponse
@@ -66,6 +69,7 @@ except ImportError:
 
 # --- Configuration ---
 load_dotenv()
+init_db()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 SERPAPI_API_KEY = os.getenv("SERPAPI_API_KEY")
 WEATHER_API_KEY = os.getenv("WEATHER_API_KEY")
@@ -2583,14 +2587,15 @@ async def get_ai_command_response(command_text: str, lat: float = None, lng: flo
 
 # --- FastAPI App Setup ---
 app = FastAPI(title="Car Command AI API", version="1.0.0")
+app.include_router(voip_router)
 
 # --- API Key Authentication Middleware ---
 @app.middleware("http")
 async def verify_api_key(request: Request, call_next):
     """Middleware to verify API key for all requests except root endpoint"""
 
-    # Skip API key check for root endpoint and health checks
-    if request.url.path in ["/", "/docs", "/redoc", "/openapi.json"]:
+    # Skip API key check for root endpoint, health checks, and VoIP webhooks
+    if request.url.path in ["/", "/docs", "/redoc", "/openapi.json"] or request.url.path.startswith("/voip/"):
         response = await call_next(request)
         return response
 
@@ -2616,8 +2621,14 @@ async def verify_api_key(request: Request, call_next):
     response = await call_next(request)
     return response
 
+@app.on_event("shutdown")
+async def shutdown_event():
+    stop_scheduler()
+
+
 @app.on_event("startup")
 async def startup_event():
+    start_scheduler()
     await initialize_semantic_search()
     await initialize_groq_client()
 
@@ -2670,7 +2681,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -3479,6 +3490,33 @@ async def stream_audio_chunk(
 #             status_code=500,
 #             content={"generated_text": "", "error": f"An internal error occurred: {str(e)}"}
 #         )
+
+# --- Appointments Endpoints ---
+@app.get("/appointments")
+async def list_appointments():
+    """Return all appointments. Protected by API key (checked in middleware)."""
+    appointments = get_all_appointments()
+    return {"appointments": appointments}
+
+
+class AppointmentStatusUpdate(BaseModel):
+    status: str
+
+
+@app.put("/appointments/{appointment_id}/status")
+async def update_status(appointment_id: str, body: AppointmentStatusUpdate):
+    """Update the status of an appointment. Protected by API key (checked in middleware)."""
+    valid_statuses = ["confirmed", "completed", "cancelled", "no-show"]
+    if body.status not in valid_statuses:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid status. Must be one of: {', '.join(valid_statuses)}"
+        )
+    update_appointment_status(appointment_id, body.status)
+    if body.status in ("cancelled", "no-show"):
+        cancel_reminders(appointment_id)
+    return {"success": True, "appointment_id": appointment_id, "status": body.status}
+
 
 # --- Root Endpoint ---
 @app.get("/")

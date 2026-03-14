@@ -1,12 +1,14 @@
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import './App.css';
+import AppointmentDashboard from './components/AppointmentDashboard';
 
 // --- Configuration ---
 // const API_BASE_URL = '/api'; // Your FastAPI backend URL
 const API_BASE_URL = 'http://localhost:8000';
 
 function App() {
+  const [activeTab, setActiveTab] = useState('chat');
   const [commandText, setCommandText] = useState('');
   const [apiResponse, setApiResponse] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
@@ -672,6 +674,34 @@ function App() {
   return (
     <div className="container">
       <h1>Virtual Car Assistant</h1>
+
+      {/* Tab Bar */}
+      <div style={{ display: 'flex', borderBottom: '2px solid #ddd', marginBottom: '24px', gap: '4px' }}>
+        {['chat', 'appointments'].map((tab) => (
+          <button
+            key={tab}
+            onClick={() => setActiveTab(tab)}
+            style={{
+              padding: '10px 24px',
+              fontSize: '14px',
+              fontWeight: '600',
+              border: 'none',
+              borderBottom: activeTab === tab ? '3px solid #2c3e50' : '3px solid transparent',
+              backgroundColor: 'transparent',
+              color: activeTab === tab ? '#2c3e50' : '#888',
+              cursor: 'pointer',
+              textTransform: 'capitalize',
+              transition: 'color 0.2s',
+            }}
+          >
+            {tab === 'chat' ? 'Chat' : 'Appointments'}
+          </button>
+        ))}
+      </div>
+
+      {activeTab === 'appointments' && <AppointmentDashboard />}
+
+      {activeTab === 'chat' && <>
       <p className="car-description">
         Interact with your virtual car using voice or text commands!
         Try "turn on the AC", "play some music", or "navigate to downtown".
@@ -812,6 +842,7 @@ function App() {
           <pre style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{hfResponse}</pre>
         </div>
       )}
+      </>}
     </div>
   );
 }
