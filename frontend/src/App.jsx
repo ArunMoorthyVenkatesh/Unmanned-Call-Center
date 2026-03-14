@@ -1,431 +1,344 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import axios from 'axios';
 import './App.css';
 import AppointmentDashboard from './components/AppointmentDashboard';
 
-// --- Configuration ---
-// const API_BASE_URL = '/api';
 const API_BASE_URL = 'http://localhost:8000';
-const API_KEY = 'nUutfYzyfwDyQ99r-7eYkQULAQLpk95zKkhlp-ISmpM';
-const HEADERS = { 'X-API-Key': API_KEY };
+const API_KEY      = 'nUutfYzyfwDyQ99r-7eYkQULAQLpk95zKkhlp-ISmpM';
+const HEADERS      = { 'X-API-Key': API_KEY };
 
-function formatTime(date) {
-  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-}
+const fmt = (d) => d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+const uid = () => 'session-' + Date.now() + '-' + Math.random().toString(36).slice(2, 9);
 
-function App() {
-  const [activeTab, setActiveTab]       = useState('chat');
-  const [commandText, setCommandText]   = useState('');
-  const [chatHistory, setChatHistory]   = useState([]);
-  const [isLoading, setIsLoading]       = useState(false);
-  const [error, setError]               = useState('');
-  const [langChoice, setLangChoice]     = useState('en');
-  const [sessionId, setSessionId]       = useState(() =>
-    'session-' + Date.now() + '-' + Math.random().toString(36).slice(2, 9)
-  );
+/* ─── SVG icons ─────────────────────────────────────────── */
+const Icons = {
+  logo: (
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M3 12h3m12 0h3M12 3v3m0 12v3"/></svg>
+  ),
+  bot: (
+    <svg viewBox="0 0 24 24"><rect x="3" y="8" width="18" height="12" rx="3"/><path d="M8 8V6a4 4 0 018 0v2"/><circle cx="9" cy="14" r="1.2" fill="currentColor" stroke="none"/><circle cx="15" cy="14" r="1.2" fill="currentColor" stroke="none"/></svg>
+  ),
+  user: (
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+  ),
+  chat: (
+    <svg viewBox="0 0 24 24"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+  ),
+  calendar: (
+    <svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>
+  ),
+  mic: (
+    <svg viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0014 0M12 19v3M9 22h6"/></svg>
+  ),
+  stop: (
+    <svg viewBox="0 0 24 24"><rect x="5" y="5" width="14" height="14" rx="2" fill="currentColor" stroke="none"/></svg>
+  ),
+  send: (
+    <svg viewBox="0 0 24 24"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+  ),
+  refresh: (
+    <svg viewBox="0 0 24 24"><path d="M1 4v6h6"/><path d="M23 20v-6h-6"/><path d="M20.49 9A9 9 0 005.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 013.51 15"/></svg>
+  ),
+};
 
-  // Recording state
-  const [isRecording, setIsRecording]       = useState(false);
-  const [isAudioSupported, setIsAudioSupported] = useState(false);
-  const [recordingTime, setRecordingTime]   = useState(0);
+export default function App() {
+  const [tab, setTab]             = useState('chat');
+  const [text, setText]           = useState('');
+  const [msgs, setMsgs]           = useState([]);
+  const [loading, setLoading]     = useState(false);
+  const [error, setError]         = useState('');
+  const [lang, setLang]           = useState('en');
+  const [session, setSession]     = useState(uid);
+  const [recording, setRecording] = useState(false);
+  const [recTime, setRecTime]     = useState(0);
+  const [micOk, setMicOk]         = useState(false);
 
-  // Refs
-  const mediaRecorderRef   = useRef(null);
-  const audioChunksRef     = useRef([]);
-  const recordingTimerRef  = useRef(null);
-  const messagesEndRef     = useRef(null);
-  const timeoutRef         = useRef(null);
+  const recRef    = useRef(null);
+  const chunksRef = useRef([]);
+  const timerRef  = useRef(null);
+  const bottomRef = useRef(null);
 
-  // Auto-scroll to bottom on new messages
+  // auto-scroll
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [msgs, loading]);
+
+  // mic support check
   useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [chatHistory, isLoading]);
-
-  // Check audio support
-  useEffect(() => {
-    const ok =
+    setMicOk(
       !!(navigator.mediaDevices?.getUserMedia) &&
       !!window.MediaRecorder &&
-      ['audio/webm', 'audio/mp4', 'audio/ogg', 'audio/wav'].some(f =>
-        MediaRecorder.isTypeSupported(f)
-      );
-    setIsAudioSupported(ok);
+      ['audio/webm','audio/mp4','audio/ogg','audio/wav'].some(f => MediaRecorder.isTypeSupported(f))
+    );
   }, []);
 
-  // Cleanup on unmount
+  // cleanup
   useEffect(() => () => {
-    if (isRecording && mediaRecorderRef.current) mediaRecorderRef.current.stop();
-    clearInterval(recordingTimerRef.current);
-    clearTimeout(timeoutRef.current);
-  }, [isRecording]);
+    clearInterval(timerRef.current);
+    if (recRef.current?.state === 'recording') recRef.current.stop();
+  }, []);
 
-  // ── Reset conversation ──
-  const resetChat = useCallback(async () => {
-    try {
-      await axios.post(`${API_BASE_URL}/reset-conversation/${sessionId}`, {}, { headers: HEADERS });
-    } catch (_) {}
-    const newId = 'session-' + Date.now() + '-' + Math.random().toString(36).slice(2, 9);
-    setSessionId(newId);
-    setChatHistory([]);
-    setCommandText('');
-    setError('');
-    clearTimeout(timeoutRef.current);
-  }, [sessionId]);
-
-  // ── TTS ──
-  const speakText = useCallback((text) => {
-    if (!text || !('speechSynthesis' in window)) return;
+  const speak = useCallback((t) => {
+    if (!t || !('speechSynthesis' in window)) return;
     window.speechSynthesis.cancel();
-    const utt = new SpeechSynthesisUtterance(text);
-    utt.lang  = langChoice === 'th' ? 'th-TH' : 'en-US';
-    utt.rate  = 0.9;
-    const voices = window.speechSynthesis.getVoices();
-    const voice  = voices.find(v =>
-      langChoice === 'th'
-        ? v.lang.toLowerCase().includes('th')
-        : v.lang.toLowerCase().startsWith('en')
+    const u = new SpeechSynthesisUtterance(t);
+    u.lang  = lang === 'th' ? 'th-TH' : 'en-US';
+    u.rate  = 0.9;
+    const v = window.speechSynthesis.getVoices().find(v =>
+      lang === 'th' ? v.lang.includes('th') : v.lang.startsWith('en')
     );
-    if (voice) utt.voice = voice;
-    window.speechSynthesis.speak(utt);
-  }, [langChoice]);
+    if (v) u.voice = v;
+    window.speechSynthesis.speak(u);
+  }, [lang]);
 
-  // ── Send text command ──
-  const handleSubmit = useCallback(async (e, textOverride) => {
-    if (e) e.preventDefault();
-    const text = textOverride !== undefined ? textOverride : commandText;
-    if (!text.trim()) return;
+  const addMsg = (msg) => setMsgs(p => [...p, { ...msg, time: new Date() }]);
 
-    setIsLoading(true);
+  const reset = async () => {
+    try { await axios.post(`${API_BASE_URL}/reset-conversation/${session}`, {}, { headers: HEADERS }); } catch (_) {}
+    setSession(uid());
+    setMsgs([]);
+    setText('');
     setError('');
-    setChatHistory(prev => [...prev, { sender: 'user', text, time: new Date() }]);
-    setCommandText('');
+  };
+
+  const send = async (e, override) => {
+    if (e) e.preventDefault();
+    const t = override ?? text;
+    if (!t.trim()) return;
+    setText('');
+    setError('');
+    setLoading(true);
+    addMsg({ role: 'user', text: t });
 
     try {
       const fd = new FormData();
-      fd.append('command_text', text);
-      fd.append('session_id',   sessionId);
-      fd.append('langChoice',   langChoice);
-
+      fd.append('command_text', t);
+      fd.append('session_id',   session);
+      fd.append('langChoice',   lang);
       const { data } = await axios.post(`${API_BASE_URL}/process-command-unified/`, fd, {
         headers: { ...HEADERS, 'Content-Type': 'multipart/form-data' },
       });
-
       if (data?.reply) {
-        setChatHistory(prev => [...prev, {
-          sender:         'assistant',
-          text:           data.reply,
-          command:        data.command,
-          openEndedValue: data.openEndedValue,
-          time:           new Date(),
-        }]);
-        speakText(data.reply);
+        addMsg({ role: 'assistant', text: data.reply, command: data.command, value: data.openEndedValue });
+        speak(data.reply);
       }
     } catch (err) {
-      const msg = err.response?.data?.reply || err.message || 'Request failed.';
-      setError(msg);
-      setChatHistory(prev => [...prev, { sender: 'assistant', text: `Error: ${msg}`, time: new Date() }]);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [commandText, sessionId, langChoice, speakText]);
-
-  // ── Key handler ──
-  const handleKeyDown = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSubmit(e); }
+      const m = err.response?.data?.reply || err.message || 'Something went wrong.';
+      setError(m);
+      addMsg({ role: 'error', text: m });
+    } finally { setLoading(false); }
   };
 
-  // ── Recording ──
-  const startRecording = async () => {
+  const startRec = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true }
-      }).catch(() => navigator.mediaDevices.getUserMedia({ audio: true }));
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } })
+        .catch(() => navigator.mediaDevices.getUserMedia({ audio: true }));
 
       const fmt = ['audio/webm;codecs=opus','audio/webm','audio/mp4','audio/ogg','audio/wav']
         .find(f => MediaRecorder.isTypeSupported(f)) || 'audio/webm';
 
-      audioChunksRef.current = [];
-      mediaRecorderRef.current = new MediaRecorder(stream, { mimeType: fmt });
+      chunksRef.current = [];
+      recRef.current = new MediaRecorder(stream, { mimeType: fmt });
 
-      let chunkIdx = 0;
-      let silenceCount = 0;
-      let stopped = false;
+      let idx = 0, silence = 0, done = false;
 
-      mediaRecorderRef.current.ondataavailable = async (ev) => {
-        if (ev.data.size > 0) {
-          audioChunksRef.current.push(ev.data);
-          // VAD check
-          if (!stopped) {
-            try {
-              const fd = new FormData();
-              fd.append('session_id',      sessionId);
-              fd.append('audio_chunk',     ev.data);
-              fd.append('chunk_index',     chunkIdx.toString());
-              fd.append('silence_threshold','1000');
-              const { data } = await axios.post(`${API_BASE_URL}/voice/stream-audio-chunk`, fd, {
-                headers: { ...HEADERS, 'Content-Type': 'multipart/form-data' },
-                timeout: 2000,
-              });
-              if (data.is_silence || data.volume < 1000) silenceCount++;
-              else silenceCount = 0;
-              if (silenceCount >= 2 && chunkIdx >= 3) {
-                stopped = true;
-                stopRecording();
-              }
-            } catch (_) {}
-          }
-          chunkIdx++;
+      recRef.current.ondataavailable = async (e) => {
+        if (!e.data.size) return;
+        chunksRef.current.push(e.data);
+        if (!done && idx > 0) {
+          try {
+            const fd = new FormData();
+            fd.append('session_id',       session);
+            fd.append('audio_chunk',      e.data);
+            fd.append('chunk_index',      idx.toString());
+            fd.append('silence_threshold','1000');
+            const { data } = await axios.post(`${API_BASE_URL}/voice/stream-audio-chunk`, fd, {
+              headers: { ...HEADERS, 'Content-Type': 'multipart/form-data' }, timeout: 2000,
+            });
+            silence = (data.is_silence || data.volume < 1000) ? silence + 1 : 0;
+            if (silence >= 2 && idx >= 3) { done = true; stopRec(); }
+          } catch (_) {}
         }
+        idx++;
       };
 
-      mediaRecorderRef.current.onstop = async () => {
+      recRef.current.onstop = async () => {
         stream.getTracks().forEach(t => t.stop());
-        const blob = new Blob(audioChunksRef.current, { type: fmt });
+        const blob = new Blob(chunksRef.current, { type: fmt });
         await sendAudio(blob, fmt);
       };
 
-      mediaRecorderRef.current.start(1000);
-      setIsRecording(true);
-      setRecordingTime(0);
+      recRef.current.start(1000);
+      setRecording(true);
+      setRecTime(0);
       setError('');
-      recordingTimerRef.current = setInterval(() => setRecordingTime(t => t + 1), 1000);
+      timerRef.current = setInterval(() => setRecTime(t => t + 1), 1000);
     } catch (err) {
-      const msg = err.name === 'NotAllowedError'
-        ? 'Microphone permission denied. Please allow access and try again.'
-        : err.name === 'NotFoundError'
-          ? 'No microphone found. Please connect one.'
-          : 'Could not access microphone.';
-      setError(msg);
+      setError(
+        err.name === 'NotAllowedError' ? 'Microphone access denied.' :
+        err.name === 'NotFoundError'   ? 'No microphone found.'      : 'Microphone error.'
+      );
     }
   };
 
-  const stopRecording = () => {
-    if (mediaRecorderRef.current?.state === 'recording') {
-      mediaRecorderRef.current.stop();
-    }
-    setIsRecording(false);
-    clearInterval(recordingTimerRef.current);
-    recordingTimerRef.current = null;
+  const stopRec = () => {
+    if (recRef.current?.state === 'recording') recRef.current.stop();
+    setRecording(false);
+    clearInterval(timerRef.current);
   };
 
   const sendAudio = async (blob, fmt) => {
-    setIsLoading(true);
+    setLoading(true);
     setError('');
     try {
-      const ext  = fmt.includes('mp4') ? 'mp4' : fmt.includes('ogg') ? 'ogg' : fmt.includes('wav') ? 'wav' : 'webm';
-      const fd   = new FormData();
-      fd.append('audio_file', blob, `recording.${ext}`);
-      fd.append('session_id', sessionId);
-      fd.append('langChoice', langChoice);
-
+      const ext = fmt.includes('mp4') ? 'mp4' : fmt.includes('ogg') ? 'ogg' : fmt.includes('wav') ? 'wav' : 'webm';
+      const fd  = new FormData();
+      fd.append('audio_file', blob, `rec.${ext}`);
+      fd.append('session_id', session);
+      fd.append('langChoice', lang);
       const { data } = await axios.post(`${API_BASE_URL}/process-command-unified/`, fd, {
-        headers: { ...HEADERS, 'Content-Type': 'multipart/form-data' },
-        timeout: 30000,
+        headers: { ...HEADERS, 'Content-Type': 'multipart/form-data' }, timeout: 30000,
       });
-
-      if (data.transcribed_text) {
-        setChatHistory(prev => [...prev, { sender: 'user', text: data.transcribed_text, time: new Date() }]);
-      }
+      if (data.transcribed_text) addMsg({ role: 'user', text: data.transcribed_text });
       if (data.reply) {
-        setChatHistory(prev => [...prev, {
-          sender:         'assistant',
-          text:           data.reply,
-          command:        data.command,
-          openEndedValue: data.openEndedValue,
-          time:           new Date(),
-        }]);
-        speakText(data.reply);
+        addMsg({ role: 'assistant', text: data.reply, command: data.command, value: data.openEndedValue });
+        speak(data.reply);
       }
     } catch (err) {
-      const msg = err.response?.data?.reply || err.message || 'Audio processing failed.';
-      setError(msg);
-    } finally {
-      setIsLoading(false);
-      setRecordingTime(0);
-    }
+      const m = err.response?.data?.reply || err.message || 'Audio processing failed.';
+      setError(m);
+    } finally { setLoading(false); setRecTime(0); }
   };
 
-  // ── Render ──
   return (
     <div className="app-shell">
 
-      {/* ── Top Nav ── */}
+      {/* Nav */}
       <nav className="top-nav">
         <div className="nav-brand">
-          <div className="nav-logo">🚗</div>
-          <div>
-            <div className="nav-title">Toyota Unmanned Service Center</div>
-            <div className="nav-subtitle">AI-Powered Call Center</div>
-          </div>
+          <div className="nav-logo">{Icons.logo}</div>
+          <span className="nav-title">Service Center</span>
         </div>
-
         <div className="nav-tabs">
-          <button
-            className={`nav-tab ${activeTab === 'chat' ? 'active' : ''}`}
-            onClick={() => setActiveTab('chat')}
-          >
-            <span className="tab-icon">💬</span> Chat
-          </button>
-          <button
-            className={`nav-tab ${activeTab === 'appointments' ? 'active' : ''}`}
-            onClick={() => setActiveTab('appointments')}
-          >
-            <span className="tab-icon">📅</span> Appointments
-          </button>
+          {[
+            { id: 'chat',         label: 'Chat',         icon: Icons.chat     },
+            { id: 'appointments', label: 'Appointments', icon: Icons.calendar },
+          ].map(t => (
+            <button key={t.id} className={`nav-tab ${tab === t.id ? 'active' : ''}`} onClick={() => setTab(t.id)}>
+              <span className="tab-icon">{t.icon}</span>{t.label}
+            </button>
+          ))}
         </div>
       </nav>
 
-      {/* ── Main ── */}
       <main className="main-content">
 
-        {/* ── Chat Tab ── */}
-        {activeTab === 'chat' && (
+        {/* Chat */}
+        {tab === 'chat' && (
           <div className="chat-page">
             <div className="chat-card">
 
-              {/* Chat header */}
+              {/* Header */}
               <div className="chat-header">
                 <div className="chat-header-info">
-                  <div className="assistant-avatar">🤖</div>
+                  <div className="assistant-avatar">{Icons.bot}</div>
                   <div>
-                    <div className="assistant-name">Toyota AI Assistant</div>
-                    <div className="assistant-status">
-                      <span className="status-dot" />
-                      Online · Gemini 2.5
-                    </div>
+                    <div className="assistant-name">AI Assistant</div>
+                    <div className="assistant-status"><span className="status-dot" />Online</div>
                   </div>
                 </div>
-
                 <div className="chat-controls">
-                  {/* Language toggle */}
                   <div className="lang-toggle">
-                    <button
-                      className={`lang-btn ${langChoice === 'en' ? 'active' : ''}`}
-                      onClick={() => setLangChoice('en')}
-                    >EN</button>
-                    <button
-                      className={`lang-btn ${langChoice === 'th' ? 'active' : ''}`}
-                      onClick={() => setLangChoice('th')}
-                    >TH</button>
+                    <button className={`lang-btn ${lang === 'en' ? 'active' : ''}`} onClick={() => setLang('en')}>EN</button>
+                    <button className={`lang-btn ${lang === 'th' ? 'active' : ''}`} onClick={() => setLang('th')}>TH</button>
                   </div>
-
-                  {/* Reset */}
-                  <button className="reset-btn" onClick={resetChat} title="Reset conversation">
-                    ↺ Reset
-                  </button>
+                  <button className="reset-btn" onClick={reset}>Reset</button>
                 </div>
               </div>
 
               {/* Messages */}
               <div className="messages-window">
-                {chatHistory.length === 0 && !isLoading && (
+                {msgs.length === 0 && !loading && (
                   <div className="empty-state">
-                    <div className="empty-icon">🚗</div>
-                    <div className="empty-text">How can I help you today?</div>
-                    <div className="empty-hint">
-                      Try "Turn on the AC", "Navigate to downtown", or ask about your car.
-                    </div>
+                    <div className="empty-icon">{Icons.chat}</div>
+                    <div className="empty-text">Start a conversation</div>
+                    <div className="empty-hint">Ask about your car, schedule service, or give a voice command.</div>
                   </div>
                 )}
 
-                {chatHistory.map((msg, i) => (
-                  <div key={i} className={`msg-row ${msg.sender}`}>
-                    <div className={`msg-avatar ${msg.sender}`}>
-                      {msg.sender === 'assistant' ? '🤖' : '👤'}
+                {msgs.map((m, i) => (
+                  <div key={i} className={`msg-row ${m.role === 'user' ? 'user' : m.role === 'error' ? 'error' : 'assistant'}`}>
+                    <div className="msg-avatar">
+                      {m.role === 'user' ? Icons.user : Icons.bot}
                     </div>
                     <div className="msg-body">
                       <div className="msg-bubble">
-                        {msg.text}
-                        {msg.sender === 'assistant' && (msg.command || msg.openEndedValue) && (
+                        {m.text}
+                        {m.role === 'assistant' && (m.command || m.value != null) && (
                           <div className="cmd-details">
-                            {msg.command && (
-                              <span className="cmd-tag">⚙️ Code: {msg.command}</span>
-                            )}
-                            {msg.openEndedValue != null && (
-                              <span className="cmd-tag">📌 Value: {msg.openEndedValue}</span>
-                            )}
+                            {m.command && <span className="cmd-tag">{m.command}</span>}
+                            {m.value != null && <span className="cmd-tag">val: {m.value}</span>}
                           </div>
                         )}
                       </div>
-                      <span className="msg-time">{msg.time ? formatTime(msg.time) : ''}</span>
+                      <span className="msg-time">{fmt(m.time)}</span>
                     </div>
                   </div>
                 ))}
 
-                {isLoading && (
+                {loading && (
                   <div className="typing-row">
-                    <div className="msg-avatar assistant">🤖</div>
+                    <div className="msg-avatar">{Icons.bot}</div>
                     <div className="typing-bubble">
-                      <div className="typing-dot" />
-                      <div className="typing-dot" />
-                      <div className="typing-dot" />
+                      <div className="typing-dot"/><div className="typing-dot"/><div className="typing-dot"/>
                     </div>
                   </div>
                 )}
-
-                <div ref={messagesEndRef} />
+                <div ref={bottomRef} />
               </div>
 
-              {/* Error banner */}
-              {error && (
-                <div className="error-banner">
-                  ⚠️ {error}
-                </div>
-              )}
+              {error && <div className="error-banner">{error}</div>}
 
-              {/* Input bar */}
+              {/* Input */}
               <div className="input-bar">
                 <input
                   className="text-input"
                   type="text"
-                  value={commandText}
-                  onChange={e => setCommandText(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder={
-                    isRecording
-                      ? `Recording… ${recordingTime}s`
-                      : 'Type a command or speak…'
-                  }
-                  disabled={isLoading || isRecording}
+                  value={text}
+                  onChange={e => setText(e.target.value)}
+                  onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(e); }}}
+                  placeholder={recording ? `Recording  ${recTime}s…` : 'Send a message…'}
+                  disabled={loading || recording}
                 />
-
-                {/* Mic button */}
                 <button
-                  className={`mic-btn ${isRecording ? 'recording' : ''}`}
-                  onClick={isRecording ? stopRecording : startRecording}
-                  disabled={isLoading || !isAudioSupported}
-                  title={
-                    !isAudioSupported
-                      ? 'Microphone unavailable'
-                      : isRecording ? 'Stop recording' : 'Start recording'
-                  }
+                  className={`icon-btn ${recording ? 'recording' : ''}`}
+                  onClick={recording ? stopRec : startRec}
+                  disabled={loading || !micOk}
+                  title={!micOk ? 'Microphone unavailable' : recording ? 'Stop' : 'Record'}
                 >
-                  {isRecording ? '⏹' : '🎙'}
-                  {isRecording && <span className="rec-timer">{recordingTime}s</span>}
+                  {recording ? Icons.stop : Icons.mic}
+                  {recording && <span className="rec-timer">{recTime}s</span>}
                 </button>
-
-                {/* Send button */}
                 <button
-                  className="send-btn"
-                  onClick={handleSubmit}
-                  disabled={isLoading || isRecording || !commandText.trim()}
+                  className="icon-btn primary"
+                  onClick={send}
+                  disabled={loading || recording || !text.trim()}
                   title="Send"
                 >
-                  ➤
+                  {Icons.send}
                 </button>
               </div>
 
-              {/* Session bar */}
+              {/* Footer */}
               <div className="session-bar">
-                <span>Session: <span className="session-id-text">{sessionId.slice(-12)}</span></span>
-                <span>{chatHistory.length} messages · {langChoice === 'en' ? 'English' : 'Thai'}</span>
+                <span className="session-id-text">{session.slice(-14)}</span>
+                <span>{msgs.length} msg{msgs.length !== 1 ? 's' : ''} · {lang === 'en' ? 'English' : 'Thai'}</span>
               </div>
+
             </div>
           </div>
         )}
 
-        {/* ── Appointments Tab ── */}
-        {activeTab === 'appointments' && (
+        {/* Appointments */}
+        {tab === 'appointments' && (
           <div className="appointments-page">
             <AppointmentDashboard />
           </div>
@@ -435,5 +348,3 @@ function App() {
     </div>
   );
 }
-
-export default App;
