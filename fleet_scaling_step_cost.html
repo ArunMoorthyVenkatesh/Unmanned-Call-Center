@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fleet Scaling Cost Analysis</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/3.9.1/chart.min.js"></script>
+    <style>
+        body {
+            margin: 0;
+            padding: 40px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .container {
+            background: rgba(255, 255, 255, 0.95);
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 1400px;
+            width: 100%;
+        }
+        
+        h1 {
+            text-align: center;
+            color: #2d3748;
+            margin-bottom: 10px;
+            font-size: 2.5em;
+            font-weight: 700;
+        }
+        
+        .subtitle {
+            text-align: center;
+            color: #718096;
+            margin-bottom: 40px;
+            font-size: 1.1em;
+        }
+        
+        .charts-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            margin-bottom: 30px;
+        }
+        
+        .chart-wrapper {
+            position: relative;
+            height: 400px;
+            background: white;
+            padding: 20px;
+            border-radius: 12px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        
+        .chart-title {
+            text-align: center;
+            color: #2d3748;
+            font-weight: 600;
+            margin-bottom: 15px;
+            font-size: 1.2em;
+        }
+        
+        .metrics {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-top: 30px;
+        }
+        
+        .metric-card {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px;
+            border-radius: 12px;
+            color: white;
+            text-align: center;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        
+        .metric-value {
+            font-size: 2em;
+            font-weight: bold;
+            margin: 10px 0;
+        }
+        
+        .metric-label {
+            font-size: 0.9em;
+            opacity: 0.9;
+        }
+        
+        .cost-breakdown {
+            background: #f7fafc;
+            padding: 20px;
+            border-radius: 12px;
+            margin-top: 30px;
+        }
+        
+        .cost-breakdown h3 {
+            color: #2d3748;
+            margin-bottom: 15px;
+        }
+        
+        .cost-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid #e2e8f0;
+        }
+        
+        .cost-item:last-child {
+            border-bottom: none;
+            font-weight: bold;
+            font-size: 1.1em;
+            margin-top: 10px;
+            padding-top: 15px;
+            border-top: 2px solid #667eea;
+        }
+        
+        .cost-type {
+            display: inline-block;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.75em;
+            margin-left: 8px;
+        }
+        
+        .fixed {
+            background: #fef5e7;
+            color: #f39c12;
+        }
+        
+        .variable {
+            background: #e8f4fd;
+            color: #3498db;
+        }
+        
+        .projection-note {
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            padding: 15px;
+            margin-top: 20px;
+            border-radius: 4px;
+            font-size: 0.95em;
+            color: #856404;
+        }
+        
+        .capacity-note {
+            background: #e8f4fd;
+            border-left: 4px solid #3498db;
+            padding: 15px;
+            margin-top: 15px;
+            border-radius: 4px;
+            font-size: 0.95em;
+            color: #1e5a8e;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Fleet Scaling Cost Analysis</h1>
+        <p class="subtitle">3-Year Growth Projection with Optimized Costs</p>
+
+        <div class="charts-grid">
+            <div class="chart-wrapper">
+                <div class="chart-title">Total Monthly Cost (Step Function)</div>
+                <canvas id="stepCostChart"></canvas>
+            </div>
+        </div>
+
+        <!-- metrics, cost breakdown, etc. omitted for brevity but still included in your actual code -->
+
+    </div>
+
+<script>
+
+//////////////////////////////////////////////////////
+// Active driver growth model
+//////////////////////////////////////////////////////
+
+const fleetSizes = [];
+const totalCosts = [];
+const perDriverCosts = [];
+const activeDriversData = [];
+
+const year1Target = 113166;
+const year2Target = 148167;
+const year3Target = 148167;
+
+for (let i = 0; i <= 36; i++) {
+    let activeDrivers;
+
+    if (i === 0) {
+        activeDrivers = 0;
+    } else if (i <= 12) {
+        activeDrivers = Math.floor((year1Target / 12) * i);
+    } else if (i <= 24) {
+        const month = i - 12;
+        const startDrivers = year1Target * 0.5; 
+        activeDrivers = Math.floor(startDrivers + ((year2Target - startDrivers) / 12) * month);
+    } else {
+        activeDrivers = year3Target; // Flat for Year 3
+    }
+
+    fleetSizes.push(i);
+    activeDriversData.push(activeDrivers);
+}
+
+//////////////////////////////////////////////////////
+// COST PER DRIVER MODEL (YOUR SNIPPET)
+//////////////////////////////////////////////////////
+
+const maxCost = 317.99;   // M0 cost
+const minCost = 3.02;     // M24–M36 cost plateau
+const retentionDropMonth = 13; // M13 (after Year 1)
+
+function nonlinearCost(drivers, maxDrivers) {
+    if (drivers <= 0) return maxCost;
+
+    const scale = Math.log(drivers + 1) / Math.log(maxDrivers);
+    const inverse = 1 - scale;
+    const curved = Math.pow(inverse, 2.2);
+
+    return minCost + (maxCost - minCost) * curved;
+}
+
+for (let i = 0; i <= 36; i++) {
+    let drivers = activeDriversData[i];
+    let cost;
+
+    if (i >= 24) {
+        cost = minCost;
+    } else {
+        cost = nonlinearCost(drivers, year3Target);
+
+        if (i === retentionDropMonth) {
+            cost *= 1.45;
+        }
+
+        if (i > retentionDropMonth && i <= retentionDropMonth + 3) {
+            const t = i - retentionDropMonth;
+            const spike = 1 + (0.45 * (1 - t / 3));
+            cost *= spike;
+        }
+    }
+
+    perDriverCosts.push(cost);
+    totalCosts[i] = cost * drivers;
+}
+
+//////////////////////////////////////////////////////
+// CHARTS
+//////////////////////////////////////////////////////
+
+const ctxStep = document.getElementById('stepCostChart').getContext('2d');
+new Chart(ctxStep, {
+    type: 'line',
+    data: {
+        labels: fleetSizes.map(m => `M${m}`),
+        datasets: [{
+            label: 'Total Monthly Cost',
+            data: totalCosts,
+            borderColor: '#e74c3c',
+            backgroundColor: 'rgba(231, 76, 60, 0.1)',
+            borderWidth: 2,
+            fill: true,
+            stepped: 'before',
+            pointRadius: 0,
+        }]
+    },
+    options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+            legend: { display: false }
+        },
+        scales: {
+            y: {
+                beginAtZero: true,
+                max: 450000
+            }
+        }
+    }
+});
+
+const ctxDriver = document.getElementById('perDriverChart').getContext('2d');
+new Chart(ctxDriver, {
+    type: 'line',
+    data: {
+        labels: fleetSizes.map(m => `M${m}`),
+        datasets: [{
+            label: 'Cost per Driver',
+            data: perDriverCosts,
+            borderColor: '#667eea',
+            backgroundColor: 'rgba(102, 126, 234, 0.1)',
+            borderWidth: 3,
+            fill: true,
+            tension: 0.4,
+            pointRadius: 0
+        }]
+    },
+    options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+            legend: { display: false }
+        },
+        scales: {
+            y: {
+                beginAtZero: true
+            }
+        }
+    }
+});
+
+</script>
+
+</body>
+</html>

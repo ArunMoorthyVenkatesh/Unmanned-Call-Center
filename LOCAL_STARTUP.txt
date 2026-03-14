@@ -1,0 +1,22 @@
+Terminal 1:
+
+1. cd frontend
+2. npm i vite
+3. npm i
+4. npm run dev (ensure API_BASE_URL is http://localhost:8000 and not /api if doing local testing)
+
+----
+
+Terminal 2:
+
+1. cd backend
+2. If Python 3.12 or above is not installed on your system, install with 'brew install python@3.12', for windows download from https://www.python.org/downloads/release/python-3120/
+   Verify installation with the command 'python3 --version'
+3. Create a venv using 'python3.12 -m venv env' 
+4. Activate the venv, for example on windows it is 'env/scripts/activate', on mac/linux it is 'source env/bin/activate'
+5. pip install -r requirements.txt
+6. Run python api_car.py
+
+----
+
+Web view will be running on vite, which is localhost:5173, make sure to run on Google Chrome for speech compatibility.
