@@ -74,7 +74,7 @@ async def process_voip_speech(speech: str, session: dict) -> dict:
     collected = session.get("collected", {})
     transcript = session.get("transcript", [])
 
-    prompt = """You are a friendly car service appointment scheduling assistant for a Toyota dealership.
+    prompt = """You are Sarah, a friendly car service appointment scheduling assistant for ABC Car Service Center.
 You are conducting a phone call to schedule a car service appointment.
 
 Current state: {state}
@@ -165,7 +165,7 @@ def send_confirmation(phone: str, email: str, appointment_data: dict, appointmen
                 f"is confirmed for {date} at {time}. "
                 f"Ref: {appointment_id[:8]}. "
                 f"You'll receive reminders 24h, 3h, and 1h before. "
-                f"- Toyota Service Center"
+                f"- ABC Car Service Center"
             )
             client.messages.create(body=sms_body, from_=TWILIO_PHONE_NUMBER, to=phone)
             logger.info(f"Confirmation SMS sent to {phone}")
@@ -181,7 +181,7 @@ def send_confirmation(phone: str, email: str, appointment_data: dict, appointmen
                 logger.warning("SES_SENDER_EMAIL not set — email confirmation skipped.")
                 return
             ses = boto3.client("ses", region_name=AWS_REGION)
-            subject = "Your Toyota Service Appointment is Confirmed"
+            subject = "Your ABC Car Service Appointment is Confirmed"
             body_text = (
                 f"Dear {name},\n\n"
                 f"Your service appointment has been confirmed!\n\n"
@@ -191,7 +191,7 @@ def send_confirmation(phone: str, email: str, appointment_data: dict, appointmen
                 f"  Time    : {time}\n"
                 f"  Ref     : {appointment_id}\n\n"
                 f"You will receive reminder notifications 24 hours, 3 hours, and 1 hour before your appointment.\n\n"
-                f"Toyota Service Center"
+                f"ABC Car Service Center"
             )
             body_html = f"""
             <html><body style="font-family:Arial,sans-serif;color:#333;">
@@ -213,7 +213,7 @@ def send_confirmation(phone: str, email: str, appointment_data: dict, appointmen
                 and <strong>1 hour</strong> before your appointment.
               </p>
               <p style="font-size:12px;color:#888;">Reference: {appointment_id}</p>
-              <p>— Toyota Service Center</p>
+              <p>— ABC Car Service Center</p>
             </body></html>
             """
             ses.send_email(
@@ -247,8 +247,8 @@ async def incoming_call(
     }
 
     greeting = (
-        "Thank you for calling Toyota Service Center. "
-        "I'm your virtual assistant and I'll help you schedule a car service appointment today. "
+        "Thank you for calling ABC Car Service Center. "
+        "I'm Sarah, your virtual assistant, and I'll help you schedule a car service appointment today. "
         "May I have your full name please?"
     )
 
@@ -293,7 +293,6 @@ async def gather(
     next_state = result.get("next_state", session["state"])
     should_save = result.get("save_appointment", False)
 
-    session["transcript"].append({"role": "assistant", "text": reply})
     session["state"] = next_state
 
     if should_save:
@@ -323,6 +322,8 @@ async def gather(
         except Exception as e:
             logger.error(f"Error saving VoIP appointment: {e}")
             reply += " However, there was an issue saving your appointment. Please call back to confirm."
+
+    session["transcript"].append({"role": "assistant", "text": reply})
 
     if session["state"] == "done":
         twiml = make_twiml_say(reply)

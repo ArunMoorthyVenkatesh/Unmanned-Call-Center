@@ -120,7 +120,7 @@ def _send_reminder(
     sms_body = (
         f"Reminder ({label}): Hi {name}, your {service_type} for {vehicle} "
         f"is on {appointment_date} at {appointment_time}. "
-        f"Toyota Service Center. Reply CANCEL to cancel."
+        f"ABC Car Service Center. Reply CANCEL to cancel."
     )
     email_subject = f"Reminder: Your Toyota Service Appointment in {label}"
     email_text = (
@@ -132,7 +132,7 @@ def _send_reminder(
         f"  Time    : {appointment_time}\n\n"
         f"Appointment ID: {appointment_id}\n\n"
         f"If you need to cancel or reschedule, please call us.\n\n"
-        f"Toyota Service Center"
+        f"ABC Car Service Center"
     )
     email_html = f"""
     <html><body style="font-family:Arial,sans-serif;color:#333;">
@@ -151,7 +151,7 @@ def _send_reminder(
       </table>
       <p style="margin-top:16px;font-size:12px;color:#888;">Appointment ID: {appointment_id}</p>
       <p>If you need to cancel or reschedule, please call us.</p>
-      <p>— Toyota Service Center</p>
+      <p>— ABC Car Service Center</p>
     </body></html>
     """
 
