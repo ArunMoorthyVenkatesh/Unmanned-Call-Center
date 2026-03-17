@@ -1,12 +1,15 @@
 """
 Reminder system for car service appointments.
-Sends SMS (Twilio) + Email (AWS SES) reminders at:
+Sends SMS (Twilio) + Email (SMTP) reminders at:
   - 24 hours before
   - 3 hours before
   - 1 hour before
 """
 import os
 import logging
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from datetime import datetime, timedelta
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -19,9 +22,15 @@ TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
 TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
 TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER")
 
-# --- AWS SES ---
+# --- SMTP Email ---
+SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
+SMTP_USER = os.getenv("SMTP_USER", "")
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "")
+
+# Keep for backward compat
 AWS_REGION = os.getenv("AWS_REGION", "ap-southeast-1")
-SES_SENDER_EMAIL = os.getenv("SES_SENDER_EMAIL", "")
+SES_SENDER_EMAIL = SMTP_USER
 
 REMINDER_OFFSETS = {
     "24hr": timedelta(hours=24),
@@ -60,6 +69,8 @@ def stop_scheduler():
 # ---------------------------------------------------------------------------
 
 def _send_sms(to_phone: str, body: str):
+    if to_phone and not to_phone.startswith("+"):
+        to_phone = "+65" + to_phone.lstrip("0")
     try:
         from twilio.rest import Client
         if not all([TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER]):
@@ -73,27 +84,26 @@ def _send_sms(to_phone: str, body: str):
 
 
 # ---------------------------------------------------------------------------
-# Email helpers (AWS SES)
+# Email helpers (SMTP)
 # ---------------------------------------------------------------------------
 
 def _send_email(to_email: str, subject: str, body_text: str, body_html: str = None):
     try:
-        import boto3
-        if not SES_SENDER_EMAIL:
-            logger.warning("SES_SENDER_EMAIL not configured — email skipped.")
+        if not SMTP_USER or not SMTP_PASSWORD:
+            logger.warning("SMTP_USER/SMTP_PASSWORD not configured — email skipped.")
             return
-        ses = boto3.client("ses", region_name=AWS_REGION)
-        body = {"Text": {"Data": body_text, "Charset": "UTF-8"}}
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = subject
+        msg["From"] = SMTP_USER
+        msg["To"] = to_email
+        msg.attach(MIMEText(body_text, "plain"))
         if body_html:
-            body["Html"] = {"Data": body_html, "Charset": "UTF-8"}
-        ses.send_email(
-            Source=SES_SENDER_EMAIL,
-            Destination={"ToAddresses": [to_email]},
-            Message={
-                "Subject": {"Data": subject, "Charset": "UTF-8"},
-                "Body": body,
-            },
-        )
+            msg.attach(MIMEText(body_html, "html"))
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
+            server.ehlo()
+            server.starttls()
+            server.login(SMTP_USER, SMTP_PASSWORD)
+            server.sendmail(SMTP_USER, to_email, msg.as_string())
         logger.info(f"Email sent to {to_email}: {subject}")
     except Exception as e:
         logger.error(f"Email send failed to {to_email}: {e}")

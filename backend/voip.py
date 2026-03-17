@@ -115,10 +115,12 @@ Respond ONLY with valid JSON in this exact format:
 Only set save_appointment=true when in confirming state AND customer has confirmed all details.
 Only include fields in extracted that were actually mentioned in this turn (use null for others).
 Keep replies concise and conversational (2-3 sentences). Be warm and professional.
+IMPORTANT: appointment_date MUST always be in dd/mm/yyyy format. Convert any relative date (tomorrow, Saturday, next Monday, etc.) to an actual calendar date in dd/mm/yyyy format. Today is {today}.
 """.format(
         state=state,
         collected=json.dumps(collected),
         transcript=json.dumps(transcript[-10:]),
+        today=datetime.now().strftime('%d/%m/%Y'),
         speech=speech,
     )
 
@@ -156,6 +158,10 @@ def send_confirmation(phone: str, email: str, appointment_data: dict, appointmen
     date = appointment_data.get("appointment_date", "")
     time = appointment_data.get("appointment_time", "")
 
+    # Normalize phone: add +65 if no country code present
+    if phone and not phone.startswith("+"):
+        phone = "+65" + phone.lstrip("0")
+
     # --- SMS ---
     client = get_twilio_client()
     if client and TWILIO_PHONE_NUMBER and phone:
@@ -172,15 +178,10 @@ def send_confirmation(phone: str, email: str, appointment_data: dict, appointmen
         except Exception as e:
             logger.error(f"SMS confirmation failed: {e}")
 
-    # --- Email (AWS SES) ---
+    # --- Email (SMTP) ---
     if email:
         try:
-            import boto3
-            from reminders import SES_SENDER_EMAIL, AWS_REGION
-            if not SES_SENDER_EMAIL:
-                logger.warning("SES_SENDER_EMAIL not set — email confirmation skipped.")
-                return
-            ses = boto3.client("ses", region_name=AWS_REGION)
+            from reminders import _send_email
             subject = "Your ABC Car Service Appointment is Confirmed"
             body_text = (
                 f"Dear {name},\n\n"
@@ -197,7 +198,7 @@ def send_confirmation(phone: str, email: str, appointment_data: dict, appointmen
             <html><body style="font-family:Arial,sans-serif;color:#333;">
               <h2 style="color:#2c3e50;">Appointment Confirmed!</h2>
               <p>Dear <strong>{name}</strong>,</p>
-              <p>Your Toyota service appointment is confirmed:</p>
+              <p>Your service appointment is confirmed:</p>
               <table style="border-collapse:collapse;width:100%;max-width:480px;">
                 <tr><td style="padding:8px;border:1px solid #ddd;background:#f5f5f5;"><strong>Vehicle</strong></td>
                     <td style="padding:8px;border:1px solid #ddd;">{vehicle}</td></tr>
@@ -216,17 +217,7 @@ def send_confirmation(phone: str, email: str, appointment_data: dict, appointmen
               <p>— ABC Car Service Center</p>
             </body></html>
             """
-            ses.send_email(
-                Source=SES_SENDER_EMAIL,
-                Destination={"ToAddresses": [email]},
-                Message={
-                    "Subject": {"Data": subject, "Charset": "UTF-8"},
-                    "Body": {
-                        "Text": {"Data": body_text, "Charset": "UTF-8"},
-                        "Html": {"Data": body_html, "Charset": "UTF-8"},
-                    },
-                },
-            )
+            _send_email(email, subject, body_text, body_html)
             logger.info(f"Confirmation email sent to {email}")
         except Exception as e:
             logger.error(f"Email confirmation failed: {e}")

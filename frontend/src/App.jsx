@@ -82,6 +82,8 @@ export default function App() {
   const [sarahSpeaking, setSarahSpeaking] = useState(false);
   const [inputField, setInputField]       = useState(null);
   const [fieldVal, setFieldVal]           = useState('');
+  const [doneFields, setDoneFields]       = useState(new Set()); // fields already submitted this session
+  const [gender, setGender]               = useState(null); // 'M' or 'F'
 
   const recRef        = useRef(null);   // SpeechRecognition instance
   const autoListenRef = useRef(false);
@@ -139,12 +141,15 @@ export default function App() {
       fd.append('command_text', text);
       fd.append('session_id', session);
       fd.append('langChoice', lang);
+      if (gender) fd.append('gender', gender);
       const { data } = await axios.post(`${API_BASE_URL}/process-command-unified/`, fd, {
         headers: { ...HEADERS, 'Content-Type': 'multipart/form-data' }, timeout: 15000,
       });
       if (data.reply) {
         setVMsgs(p => [...p, { role: 'assistant', text: data.reply, time: new Date() }]);
-        const field = detectField(data.reply);
+        const detected = detectField(data.reply);
+        // Never re-show a field the user already submitted this session
+        const field = detected && !doneFields.has(detected) ? detected : null;
         setInputField(field);
         await speakText(data.reply);
         if (detectConversationEnd(data.reply)) {
@@ -156,7 +161,7 @@ export default function App() {
     } catch (err) {
       setVError(err.response?.data?.reply || err.message || 'Something went wrong.');
     } finally { setVLoading(false); }
-  }, [session, lang, speakText]); // startRecCore added below via ref
+  }, [session, lang, gender, speakText, doneFields]); // startRecCore added below via ref
 
   /* ────────────────────────────────────────────────────────
      Browser SpeechRecognition — real-time, zero upload latency
@@ -238,8 +243,10 @@ export default function App() {
   const submitField = useCallback(async () => {
     const val = fieldVal.trim();
     if (!val || vLoading) return;
+    const submittedField = inputField; // capture before clearing
     setFieldVal('');
     setInputField(null);
+    setDoneFields(prev => new Set([...prev, submittedField])); // mark as done
     setVLoading(true);
     setVMsgs(p => [...p, { role: 'user', text: val, time: new Date() }]);
     try {
@@ -247,12 +254,16 @@ export default function App() {
       fd.append('command_text', val);
       fd.append('session_id', session);
       fd.append('langChoice', lang);
+      if (gender) fd.append('gender', gender);
       const { data } = await axios.post(`${API_BASE_URL}/process-command-unified/`, fd, {
         headers: { ...HEADERS, 'Content-Type': 'multipart/form-data' },
       });
       if (data?.reply) {
         setVMsgs(p => [...p, { role: 'assistant', text: data.reply, time: new Date() }]);
-        const field = detectField(data.reply);
+        const detected = detectField(data.reply);
+        // Use updated set including the field we just submitted
+        const newDone = new Set([...doneFields, submittedField]);
+        const field = detected && !newDone.has(detected) ? detected : null;
         setInputField(field);
         await speakText(data.reply);
         if (detectConversationEnd(data.reply)) {
@@ -264,7 +275,7 @@ export default function App() {
     } catch (err) {
       setVError(err.response?.data?.reply || err.message || 'Something went wrong.');
     } finally { setVLoading(false); }
-  }, [fieldVal, vLoading, session, lang, speakText, startRecCore]);
+  }, [fieldVal, inputField, doneFields, vLoading, session, lang, gender, speakText, startRecCore]);
 
   /* ────────────────────────────────────────────────────────
      Start / End conversation
@@ -275,6 +286,8 @@ export default function App() {
     setVMsgs([{ role: 'assistant', text: GREETING_TEXT, time: new Date() }]);
     setInputField(null);
     setFieldVal('');
+    setDoneFields(new Set());
+    setGender(null);
     setVError('');
     await speakText(GREETING_TEXT);
     if (autoListenRef.current) startRecCore();
@@ -290,6 +303,8 @@ export default function App() {
     setSarahSpeaking(false);
     setInputField(null);
     setFieldVal('');
+    setDoneFields(new Set());
+    setGender(null);
     setVMsgs([]);
     setVError('');
     try { axios.post(`${API_BASE_URL}/reset-conversation/${session}`, {}, { headers: HEADERS }); } catch (_) {}
@@ -417,7 +432,7 @@ export default function App() {
 
             <div className="voice-log">
               {!convActive ? (
-                <div className="vlog-idle">Press <strong>Start Conversation</strong> to begin</div>
+                <div className="vlog-idle">Press <strong> Start Conversation </strong> to begin</div>
               ) : (
                 <>
                   {vMsgs.map((m, i) => (
@@ -447,7 +462,15 @@ export default function App() {
 
             {inputField && convActive && (
               <div className="field-input-bar">
-                <div className="field-label">{fieldMeta[inputField].label}</div>
+                <div className="field-label-row">
+                  <span className="field-label">{fieldMeta[inputField].label}</span>
+                  {inputField === 'name' && (
+                    <div className="gender-toggle">
+                      <button className={`gender-btn ${gender === 'M' ? 'active' : ''}`} onClick={() => setGender('M')}>M</button>
+                      <button className={`gender-btn ${gender === 'F' ? 'active' : ''}`} onClick={() => setGender('F')}>F</button>
+                    </div>
+                  )}
+                </div>
                 <div className="field-row">
                   <input
                     className="field-input"

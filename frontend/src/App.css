@@ -631,11 +631,46 @@ body {
   animation: fadeUp 0.18s ease;
 }
 
+.field-label-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
 .field-label {
   font-size: 10px;
   font-weight: 700;
   letter-spacing: 1px;
   text-transform: uppercase;
+  color: var(--teal);
+}
+
+.gender-toggle {
+  display: flex;
+  gap: 4px;
+}
+
+.gender-btn {
+  width: 30px;
+  height: 24px;
+  border: 1px solid var(--border-hi);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-sub);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+
+.gender-btn.active {
+  background: var(--teal);
+  border-color: var(--teal);
+  color: #060b14;
+}
+
+.gender-btn:hover:not(.active) {
+  border-color: var(--teal);
   color: var(--teal);
 }
 

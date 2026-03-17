@@ -3,7 +3,8 @@ import logging
 import asyncio
 import re
 import json
-from datetime import datetime, timezone
+import threading
+from datetime import datetime, timezone, timedelta
 from typing import Optional # Import Optional
 from serpapi import GoogleSearch
 import random
@@ -26,9 +27,9 @@ except ImportError:
 
 import google.generativeai as genai
 from dotenv import load_dotenv
-from voip import router as voip_router
-from appointments_db import init_db, get_all_appointments, update_appointment_status
-from reminders import start_scheduler, stop_scheduler, cancel_reminders
+from voip import router as voip_router, send_confirmation
+from appointments_db import init_db, get_all_appointments, update_appointment_status, save_appointment, get_available_slots, is_slot_available, ALL_SLOTS, MAX_APPOINTMENTS_PER_DAY
+from reminders import start_scheduler, stop_scheduler, cancel_reminders, schedule_reminders
 
 from fastapi import FastAPI, HTTPException, Request, File, UploadFile, Form
 from fastapi.responses import JSONResponse
@@ -37,7 +38,6 @@ import uvicorn
 from pydantic import BaseModel
 from typing import List, Dict
 import uuid
-from datetime import datetime, timedelta
 from geopy.distance import geodesic
 import pdfplumber
 
@@ -193,7 +193,6 @@ def fetch_lottery_results(date_id: str) -> dict:
 def get_latest_lottery_date() -> str:
     """Get the most recent lottery date ID that is not ahead of the current date.
     Uses Thai Buddhist Era calendar where 2567 = 2024, 2568 = 2025, etc."""
-    from datetime import datetime
     global LOTTERY_DATES
     if not LOTTERY_DATES:
         LOTTERY_DATES = fetch_lottery_dates()
@@ -368,7 +367,7 @@ if GEMINI_API_KEY:
         logger.error(f"Error initializing Gemini model '{MODEL_NAME_GEMINI}': {e}", exc_info=True)
         # raise # Don't raise if we want to allow HF to run even if Gemini fails
 
-generation_config_gemini = genai.GenerationConfig(temperature=0.4, top_p=0.9, top_k=40)
+generation_config_gemini = genai.GenerationConfig(temperature=0.4, top_p=0.9, top_k=40, response_mime_type="application/json")
 safety_settings_gemini = []
 
 async def initialize_groq_client():
@@ -1321,7 +1320,7 @@ def perform_general_search(query: str, location: str = None) -> dict:
         logger.error(f"Error during general search: {e}", exc_info=True)
         return {"error": f"General search failed: {str(e)}"}
 
-def create_gemini_prompt_with_search(statement="", search_results=None, conversation_context="", langChoice="en", routing=None, user_lat=None, user_lon=None):
+def create_gemini_prompt_with_search(statement="", search_results=None, conversation_context="", langChoice="en", routing=None, user_lat=None, user_lon=None, gender=None, available_slots=None, chosen_date=None):
     """Create Gemini prompt that includes search results, weather data, lottery data, and conversation context for web queries.
 
     Args:
@@ -1460,7 +1459,6 @@ Number of forecast periods: {len(forecast_list)}
 """
                     # Show first 3 forecast periods with detailed breakdown
                     for i, period in enumerate(forecast_list[:3]):
-                        from datetime import datetime
                         dt = period.get('dt', 0)
                         timestamp = datetime.fromtimestamp(dt).strftime('%Y-%m-%d %H:%M:%S') if dt else 'N/A'
                         aqi = period.get('main', {}).get('aqi', 'N/A')
@@ -1485,7 +1483,6 @@ Number of historical periods: {len(historical_list)}
 """
                     # Show first 3 historical periods with detailed breakdown
                     for i, period in enumerate(historical_list[:3]):
-                        from datetime import datetime
                         dt = period.get('dt', 0)
                         timestamp = datetime.fromtimestamp(dt).strftime('%Y-%m-%d %H:%M:%S') if dt else 'N/A'
                         aqi = period.get('main', {}).get('aqi', 'N/A')
@@ -1723,13 +1720,31 @@ User query: {statement}
     else:
         logger.info(f"Skipping manual search for: '{statement}' (routing: needs_car_manual={manual_needed})")
 
+    _today_str = datetime.now().strftime('%d/%m/%Y')
+
+    # Build available slots context
+    if chosen_date and available_slots is not None:
+        if len(available_slots) == 0:
+            slots_context = f"\n**APPOINTMENT SLOTS for {chosen_date}:** Fully booked — no slots available. Apologise and ask the customer to choose a different date.\n"
+        else:
+            slots_display = ", ".join(available_slots)
+            slots_context = f"\n**APPOINTMENT SLOTS for {chosen_date} (AVAILABLE):** {slots_display}\nOnly offer times from this list. If the customer requests a time not in this list, apologise and offer the nearest available slot.\n"
+    else:
+        all_slots_display = ", ".join(ALL_SLOTS)
+        slots_context = f"\n**APPOINTMENT TIME RULES:**\n- Valid slots (30-min intervals): {all_slots_display}\n- Lunch break: 12:30–14:00 — NO appointments\n- Max {MAX_APPOINTMENTS_PER_DAY} appointments per day\n- Only one appointment per slot — no double-booking\n- Once the customer provides a date, only offer slots that are actually available\n"
+
     lang_name = 'Thai' if langChoice == 'th' else 'English'
+    honorific_line = ""
+    if gender == 'M':
+        honorific_line = "\n**HONORIFIC:** Address the customer as \"sir\" throughout the entire conversation. Never use \"ma'am\"."
+    elif gender == 'F':
+        honorific_line = "\n**HONORIFIC:** Address the customer as \"ma'am\" throughout the entire conversation. Never use \"sir\"."
     prompt = f"""
 
 **MANDATORY LANGUAGE SETTING - APPLY IMMEDIATELY:**
 - ALL responses must be in {'Thai' if langChoice == 'th' else 'English'} language
 - The `reply` field MUST be in {'Thai' if langChoice == 'th' else 'English'}
-- Switch language NOW - no delays or buffers
+- Switch language NOW - no delays or buffers{honorific_line}
 
 {conversation_context}
 
@@ -1740,6 +1755,8 @@ User query: {statement}
 {dealership_context}
 
 {specifications_context}
+
+{slots_context}
 
 You are **Sarah**, a friendly and professional AI customer service assistant for **ABC Car Service Center**.
 
@@ -1760,14 +1777,35 @@ Your role is to help customers with:
 1. Ask for their **full name** first
 2. Ask for **vehicle details** (make, model, year)
 3. Ask what **service** they need (oil change, brake check, etc.)
-4. Ask for **preferred date**
-5. Ask for **preferred time** (remind: 8 AM–5 PM, Mon–Sat)
+4. Ask for **preferred date** (remind: Mon–Sat only)
+5. Ask for **preferred time** — ONLY offer slots from the **AVAILABLE SLOTS** list below
 6. Ask for **phone number** — say exactly: "Could I get your phone number please?"
 7. Ask for **email address** — say exactly: "And your email address please?"
 8. **Read back ALL details** and ask them to confirm
 9. Once confirmed: say "Your appointment is confirmed! We'll see you on [date] at [time]. Goodbye and have a great day!" — end the conversation warmly
 
-IMPORTANT: Collect ALL details in this exact order. Do NOT ask for phone or email before getting vehicle, service, date and time.
+**CRITICAL RULES:**
+- **BEFORE ASKING ANYTHING** — go through this checklist using the conversation history above:
+  - Do I already have their NAME? → if yes, skip asking for it
+  - Do I already have their VEHICLE? → if yes, skip asking for it
+  - Do I already have the SERVICE TYPE? → if yes, skip asking for it
+  - Do I already have the DATE? → if yes, skip asking for it
+  - Do I already have the TIME? → if yes, skip asking for it
+  - Do I already have their PHONE? → if yes, skip asking for it
+  - Do I already have their EMAIL? → if yes, skip asking for it
+  - Only ask for the FIRST missing piece of information, then stop.
+- NEVER re-ask for something already given, even if it was mentioned casually or early in the conversation.
+- Once you have the phone number AND the email address, your ONLY next step is to read back ALL appointment details and ask the customer to confirm. Do NOT ask for phone or email again.
+- After the customer confirms, say the goodbye message and end. Do NOT ask any more questions.
+- Do NOT invent, suggest, or list available time slots. You do not have access to a booking calendar. Simply accept whatever date and time the customer requests.
+- Do NOT ask for phone or email before getting vehicle, service, date and time.
+- The collected information flows in ONE direction only — forward. Never go backwards.
+- **DATE FORMAT — MANDATORY:** Always convert the appointment date to `dd/mm/yyyy` format before saving. Today is {_today_str}. If the customer says "tomorrow" → add 1 day and format as dd/mm/yyyy. If they say "Saturday", "next Monday", etc. → calculate the actual calendar date and format as dd/mm/yyyy. The `appointment_date` field in `appointment_data` MUST always be a date in `dd/mm/yyyy` format, never a relative word.
+
+**CONFIRMATION — READ THIS CAREFULLY:**
+- After you read back all details and ask "Does all of this sound correct?", if the customer replies with ANY of the following: "yes", "yup", "yeah", "correct", "that's right", "looks good", "ok", "okay", "sure", "confirmed", "sounds good", "go ahead", "perfect", "great" — treat this as FINAL CONFIRMATION.
+- On final confirmation you MUST: (1) set `save_appointment: true`, (2) populate `appointment_data`, (3) say the goodbye message. NEVER ask "Does all of this sound correct?" again.
+- If you have already asked for confirmation and the customer has already answered, do NOT repeat the confirmation question under any circumstances.
 
 **CONVERSATION CONTINUITY:**
 - Always consider the conversation history above when responding
@@ -1779,11 +1817,32 @@ You MUST return ONLY a JSON object:
 {{
   "command": "11111111",
   "reply": "YOUR_RESPONSE_HERE",
-  "openEndedValue": null
+  "openEndedValue": null,
+  "save_appointment": false,
+  "appointment_data": null
 }}
 
 Use `"command": "11111110"` for informational/how-to responses.
 Use `"command": null` only if the request is completely outside your scope (e.g., booking a flight, doing homework).
+
+When the customer has confirmed their appointment (step 9), return this COMPLETE JSON (all 5 fields required):
+{{
+  "command": "11111111",
+  "reply": "Your appointment is confirmed! We'll see you on [date] at [time]. Goodbye and have a great day!",
+  "openEndedValue": null,
+  "save_appointment": true,
+  "appointment_data": {{
+    "name": "customer full name",
+    "phone": "phone number",
+    "email": "email address",
+    "vehicle": "make model year",
+    "service_type": "type of service",
+    "appointment_date": "date",
+    "appointment_time": "time"
+  }}
+}}
+CRITICAL: The confirmation JSON MUST include "command", "reply", "openEndedValue", "save_appointment", and "appointment_data" — ALL 5 fields. Never omit any field.
+Set `save_appointment: true` IMMEDIATELY when the customer says yes/yup/correct/ok/confirmed/sure to the final summary. Do NOT repeat the summary question — go straight to the goodbye message with save_appointment: true.
 
 **LANGUAGE:**
 - YOUR OUTPUT reply MUST be in {'Thai' if langChoice == 'th' else 'English'}
@@ -1913,8 +1972,7 @@ _NULL_ROUTING = {
 }
 
 # Keywords that signal external data is actually needed — everything else skips Gemini routing
-import re as _re
-_NEEDS_ROUTING_RE = _re.compile(
+_NEEDS_ROUTING_RE = re.compile(
     r'\b(weather|forecast|rain|temperature|temp|hot|cold|humid|sunny|cloudy|storm|typhoon|flood|'
     r'air quality|aqi|pollution|pm2\.?5|'
     r'nearby|near me|around here|closest|restaurant|cafe|coffee|food|eat|hotel|hospital|clinic|gas station|petrol|'
@@ -1922,8 +1980,14 @@ _NEEDS_ROUTING_RE = _re.compile(
     r'joke|funny|tell me a joke|make me laugh|'
     r'news|latest|current events|who is|what happened|who won|'
     r'อากาศ|ฝน|อุณหภูมิ|ร้าน|ใกล้)\b',
-    _re.IGNORECASE
+    re.IGNORECASE
 )
+
+# Pre-compiled patterns reused across requests
+_RE_DATE  = re.compile(r'\b(\d{2}/\d{2}/\d{4})\b')
+_RE_TIME  = re.compile(r'\b(\d{1,2}:\d{2})\b')
+_RE_PHONE = re.compile(r'\b(\+?\d{8,15})\b')
+_RE_EMAIL = re.compile(r'\b[\w.+-]+@[\w-]+\.\w+\b')
 
 
 async def determine_query_requirements(command_text: str) -> dict:
@@ -2206,7 +2270,7 @@ Respond with JSON only, no explanation."""
         }
 
 # --- Core Command Processing Logic (Modified for SerpAPI integration) ---
-async def get_ai_command_response(command_text: str, lat: float = None, lng: float = None, session_id: str = None, langChoice: str = None) -> dict:
+async def get_ai_command_response(command_text: str, lat: float = None, lng: float = None, session_id: str = None, langChoice: str = None, gender: str = None) -> dict:
     """Process command with Gemini, including web search results and conversation history if needed."""
     if not gemini_model:
         logger.error("Gemini model not initialized. Cannot process command.")
@@ -2219,6 +2283,8 @@ async def get_ai_command_response(command_text: str, lat: float = None, lng: flo
 
     session = get_or_create_session(session_id)
     session.add_message("user", command_text)
+    # Use gender from session (already stored by endpoint) or passed directly
+    effective_gender = session.gender or gender
     logger.info(f"Processing command with Gemini: '{command_text}' for session: {session.session_id}")
 
     conversation_context = session.get_context_for_gemini(command_text)
@@ -2308,11 +2374,21 @@ async def get_ai_command_response(command_text: str, lat: float = None, lng: flo
     else:
         logger.info(f"No external search needed for '{command_text}' - using {routing['query_type']}")
 
+    # Extract date from conversation history (dd/mm/yyyy pattern) for slot availability
+    chosen_date = None
+    available_slots = None
+    full_context = conversation_context + " " + command_text
+    date_match = _RE_DATE.search(full_context)
+    if date_match:
+        chosen_date = date_match.group(1)
+        available_slots = get_available_slots(chosen_date)
+        logger.info(f"Date detected in context: {chosen_date}, available slots: {available_slots}")
+
     # Compose prompt for Gemini (only pass lat/lng if location was needed)
     if needs_location:
-        prompt = create_gemini_prompt_with_search(command_text, search_results, conversation_context, langChoice, routing, user_lat=lat, user_lon=lng)
+        prompt = create_gemini_prompt_with_search(command_text, search_results, conversation_context, langChoice, routing, user_lat=lat, user_lon=lng, gender=effective_gender, available_slots=available_slots, chosen_date=chosen_date)
     else:
-        prompt = create_gemini_prompt_with_search(command_text, search_results, conversation_context, langChoice, routing, user_lat=None, user_lon=None)
+        prompt = create_gemini_prompt_with_search(command_text, search_results, conversation_context, langChoice, routing, user_lat=None, user_lon=None, gender=effective_gender, available_slots=available_slots, chosen_date=chosen_date)
 
     logger.info(f"Sending prompt to Gemini for: '{command_text}'")
     logger.debug(f"Prompt for Gemini: {prompt}")
@@ -2341,14 +2417,19 @@ async def get_ai_command_response(command_text: str, lat: float = None, lng: flo
             if hasattr(part, 'text'):
                 raw_text = part.text.strip()
                 try:
-                    json_match = re.search(r"```json\s*({.*?})\s*```|({.*?})", raw_text, re.DOTALL)
-                    if json_match:
-                        json_str = json_match.group(1) or json_match.group(2)
-                        logger.info(f"Extracted JSON from markdown: '{json_str[:200]}'")
-                        parsed_json = json.loads(json_str.strip())
-                    else:
-                        logger.info(f"Attempting to parse raw text as JSON")
+                    # Try 1: parse raw text directly
+                    try:
                         parsed_json = json.loads(raw_text)
+                    except json.JSONDecodeError:
+                        # Try 2: extract between first { and last }
+                        start = raw_text.find('{')
+                        end = raw_text.rfind('}')
+                        if start != -1 and end != -1 and end > start:
+                            json_str = raw_text[start:end+1]
+                            logger.info(f"Extracted JSON by brace search: '{json_str[:200]}'")
+                            parsed_json = json.loads(json_str)
+                        else:
+                            raise
 
                     if not all(k in parsed_json for k in ["command", "reply", "openEndedValue"]):
                         logger.warning(f"AI response missing required keys: {parsed_json}")
@@ -2356,15 +2437,60 @@ async def get_ai_command_response(command_text: str, lat: float = None, lng: flo
 
                     logger.info(f"Successfully parsed Gemini response: command={parsed_json.get('command')}, reply_length={len(parsed_json.get('reply', ''))}")
 
+                    # Save appointment when Sarah has collected all details and customer confirmed
+                    if parsed_json.get("save_appointment") and parsed_json.get("appointment_data"):
+                        try:
+                            apt = parsed_json["appointment_data"]
+                            # Double-booking guard
+                            if not is_slot_available(apt.get("appointment_date", ""), apt.get("appointment_time", "")):
+                                logger.warning(f"Slot conflict: {apt.get('appointment_date')} {apt.get('appointment_time')} already booked or invalid")
+                                parsed_json["save_appointment"] = False
+                                parsed_json["reply"] = (
+                                    "I'm sorry, that time slot was just taken or is not a valid slot. "
+                                    "Could you please choose a different time?"
+                                )
+                                session.add_message("assistant", parsed_json["reply"])
+                                return parsed_json
+                            apt["created_at"] = datetime.now().isoformat()
+                            apt["status"]     = "confirmed"
+                            apt["notes"]      = f"Booked via web portal. Session: {session_id}"
+                            appointment_id = save_appointment(apt)
+                            logger.info(f"Appointment saved via web chat: id={appointment_id}")
+
+                            # SMS + email confirmation (run in background thread to avoid blocking async loop)
+                            def _notify():
+                                try:
+                                    logger.info(f"Sending confirmation to phone={apt.get('phone')} email={apt.get('email')}")
+                                    send_confirmation(
+                                        apt.get("phone", ""),
+                                        apt.get("email", ""),
+                                        apt,
+                                        appointment_id,
+                                    )
+                                    logger.info(f"Confirmation sent successfully for appointment {appointment_id}")
+                                except Exception as notify_err:
+                                    logger.error(f"Confirmation notification failed: {notify_err}", exc_info=True)
+                            threading.Thread(target=_notify, daemon=True).start()
+
+                            # Schedule 24hr / 3hr / 1hr reminders
+                            schedule_reminders({**apt, "appointment_id": appointment_id})
+
+                            # Embed short ID into Sarah's reply
+                            parsed_json["reply"] = parsed_json["reply"].replace(
+                                "{appointment_id}", appointment_id[:8]
+                            )
+                        except Exception as e:
+                            logger.error(f"Error saving web chat appointment: {e}")
+
                     # Save assistant's reply to session history
                     session.add_message("assistant", parsed_json.get("reply", ""))
 
                     return parsed_json
-                except json.JSONDecodeError as json_err:
+                except (json.JSONDecodeError, ValueError) as json_err:
                     logger.error(f"Failed to parse JSON from Gemini: {json_err}. Raw text: '{raw_text}'")
                     return {
                         "command": None,
-                        "reply": "Error: AI response was not valid JSON.",
+                        "reply": "I'm sorry, I had trouble processing that. Could you please try again?",
                         "openEndedValue": None,
                         "error": "INVALID_AI_JSON_RESPONSE"
                     }
@@ -2508,6 +2634,7 @@ class ConversationSession:
         self.chat_history = []
         self.created_at = datetime.now()
         self.last_activity = datetime.now()
+        self.gender = None  # 'M' or 'F' — set once when customer provides it
     
     def add_message(self, role: str, content: str):
         self.chat_history.append({
@@ -2521,14 +2648,35 @@ class ConversationSession:
         """Create context string from chat history for Gemini"""
         if not self.chat_history:
             return ""
-        
+
         context = "\n**CONVERSATION HISTORY:**\n"
-        for msg in self.chat_history[-6:]:  
+        for msg in self.chat_history[-20:]:
             role_display = "User" if msg["role"] == "user" else "Assistant"
             context += f"{role_display}: {msg['content']}\n"
-        
+
+        # Extract already-collected fields from history to make them explicit
+        history_text = " ".join(m["content"] for m in self.chat_history)
+        collected = {}
+        date_match = _RE_DATE.search(history_text)
+        if date_match:
+            collected["appointment_date"] = date_match.group(1)
+        time_match = _RE_TIME.search(history_text)
+        if time_match:
+            collected["appointment_time"] = time_match.group(1)
+        phone_match = _RE_PHONE.search(history_text)
+        if phone_match:
+            collected["phone"] = phone_match.group(1)
+        email_match = _RE_EMAIL.search(history_text)
+        if email_match:
+            collected["email"] = email_match.group(0)
+
+        if collected:
+            context += "\n**ALREADY COLLECTED (DO NOT ASK AGAIN):**\n"
+            for k, v in collected.items():
+                context += f"  - {k}: {v}\n"
+
         context += f"\n**CURRENT USER INPUT:** {current_statement}\n"
-        context += "\n**IMPORTANT:** Consider the conversation history above when responding. Maintain context and continuity.\n\n"
+        context += "\n**IMPORTANT:** Use the ALREADY COLLECTED section above — do NOT re-ask for any of those fields.\n\n"
         return context
     
     def is_expired(self) -> bool:
@@ -2653,6 +2801,7 @@ async def process_command_unified_endpoint(
     lng: Optional[float] = Form(None),
     session_id: Optional[str] = Form(None),
     langChoice: str = Form("en"),
+    gender: Optional[str] = Form(None),
     enable_auto_stop: Optional[bool] = Form(False),
     silence_threshold: Optional[int] = Form(500),
     min_speech_duration_ms: Optional[int] = Form(500),
@@ -2810,6 +2959,12 @@ async def process_command_unified_endpoint(
         raise HTTPException(status_code=400, detail="command_text cannot be empty")
 
     logger.info(f"Processing command: '{command_text}', session: {session_id}, langChoice: {langChoice}")
+
+    # Persist gender on session if provided
+    if gender and session_id:
+        sess = get_or_create_session(session_id)
+        if gender in ('M', 'F'):
+            sess.gender = gender
 
     ai_response_dict = await get_ai_command_response(command_text, lat=lat, lng=lng, session_id=session_id, langChoice=langChoice)
 
