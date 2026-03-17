@@ -215,7 +215,7 @@ export default function AppointmentDashboard() {
     { label: 'Cancelled', value: counts.cancelled,  accent: '#ff4a5e' },
   ];
 
-  const cols = ['Ref', 'Name', 'Phone', 'Vehicle', 'Service', 'Date', 'Time', 'Status', 'Actions'];
+  const cols = ['Ref', 'Name', 'Vehicle', 'Service', 'Date', 'Time', 'Email', 'Status', 'Actions'];
 
   return (
     <div style={S.wrap}>
@@ -281,11 +281,11 @@ export default function AppointmentDashboard() {
                       {appt.appointment_id?.slice(0, 8) || '-'}
                     </td>
                     <td style={S.td}>{appt.name || '-'}</td>
-                    <td style={{ ...S.td, ...S.tdMuted }}>{appt.phone || '-'}</td>
                     <td style={S.td}>{appt.vehicle || '-'}</td>
                     <td style={S.td}>{appt.service_type || '-'}</td>
                     <td style={{ ...S.td, ...S.tdMuted }}>{appt.appointment_date || '-'}</td>
                     <td style={{ ...S.td, ...S.tdMuted }}>{appt.appointment_time || '-'}</td>
+                    <td style={{ ...S.td, ...S.tdMuted }}>{appt.email || '-'}</td>
                     <td style={S.td}>
                       <span style={S.badge(appt.status)}>{appt.status}</span>
                     </td>

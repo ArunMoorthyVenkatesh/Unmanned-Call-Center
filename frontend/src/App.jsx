@@ -32,7 +32,6 @@ const detectField = (reply) => {
   const isAsk = r.includes('?') || /\b(please|could you|may i|can i|would you)\b/.test(r);
   if (!isAsk) return null;
   if (/\b(your (full )?name|name please|what'?s? your name|may i (have|know) your name|could i (get|have) your name)\b/.test(r)) return 'name';
-  if (/\b(your (phone|mobile|contact) number|phone number please|could i get your phone|your number please|contact number)\b/.test(r)) return 'phone';
   if (/\b(your email( address)?|email address please|could i (get|have) your email|and your email)\b/.test(r)) return 'email';
   return null;
 };
