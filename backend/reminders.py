@@ -17,11 +17,6 @@ from apscheduler.jobstores.memory import MemoryJobStore
 
 logger = logging.getLogger(__name__)
 
-# --- Twilio ---
-TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID")
-TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN")
-TWILIO_PHONE_NUMBER = os.getenv("TWILIO_PHONE_NUMBER")
-
 # --- SMTP Email ---
 SMTP_HOST = os.getenv("SMTP_HOST", "smtp.gmail.com")
 SMTP_PORT = int(os.getenv("SMTP_PORT", "587"))
@@ -65,25 +60,6 @@ def stop_scheduler():
 
 
 # ---------------------------------------------------------------------------
-# SMS helpers
-# ---------------------------------------------------------------------------
-
-def _send_sms(to_phone: str, body: str):
-    if to_phone and not to_phone.startswith("+"):
-        to_phone = "+65" + to_phone.lstrip("0")
-    try:
-        from twilio.rest import Client
-        if not all([TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_PHONE_NUMBER]):
-            logger.warning("Twilio credentials not configured — SMS skipped.")
-            return
-        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
-        client.messages.create(body=body, from_=TWILIO_PHONE_NUMBER, to=to_phone)
-        logger.info(f"SMS sent to {to_phone}")
-    except Exception as e:
-        logger.error(f"SMS send failed to {to_phone}: {e}")
-
-
-# ---------------------------------------------------------------------------
 # Email helpers (SMTP)
 # ---------------------------------------------------------------------------
 
@@ -116,7 +92,6 @@ def _send_email(to_email: str, subject: str, body_text: str, body_html: str = No
 def _send_reminder(
     appointment_id: str,
     name: str,
-    phone: str,
     email: str,
     vehicle: str,
     service_type: str,
@@ -127,12 +102,7 @@ def _send_reminder(
     """Job executed by APScheduler to send a reminder."""
     logger.info(f"Sending {label} reminder for appointment {appointment_id}")
 
-    sms_body = (
-        f"Reminder ({label}): Hi {name}, your {service_type} for {vehicle} "
-        f"is on {appointment_date} at {appointment_time}. "
-        f"ABC Car Service Center. Reply CANCEL to cancel."
-    )
-    email_subject = f"Reminder: Your Toyota Service Appointment in {label}"
+    email_subject = f"Reminder: Your ABC Car Service Appointment in {label}"
     email_text = (
         f"Dear {name},\n\n"
         f"This is a reminder that your car service appointment is coming up:\n\n"
@@ -165,8 +135,6 @@ def _send_reminder(
     </body></html>
     """
 
-    if phone:
-        _send_sms(phone, sms_body)
     if email:
         _send_email(email, email_subject, email_text, email_html)
 
@@ -230,7 +198,6 @@ def schedule_reminders(appointment: dict):
             kwargs={
                 "appointment_id": appointment_id,
                 "name": appointment.get("name", ""),
-                "phone": appointment.get("phone", ""),
                 "email": appointment.get("email", ""),
                 "vehicle": appointment.get("vehicle", ""),
                 "service_type": appointment.get("service_type", ""),

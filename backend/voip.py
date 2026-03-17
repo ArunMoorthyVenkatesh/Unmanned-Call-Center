@@ -12,7 +12,7 @@ from reminders import schedule_reminders
 
 logger = logging.getLogger(__name__)
 
-# --- Twilio imports (graceful if not installed) ---
+# --- Twilio imports (VoIP only) ---
 try:
     from twilio.twiml.voice_response import VoiceResponse, Gather
     from twilio.rest import Client as TwilioClient
@@ -151,32 +151,12 @@ IMPORTANT: appointment_date MUST always be in dd/mm/yyyy format. Convert any rel
 
 
 def send_confirmation(phone: str, email: str, appointment_data: dict, appointment_id: str):
-    """Send SMS + email confirmation immediately after booking."""
+    """Send email confirmation immediately after booking."""
     name = appointment_data.get("name", "Customer")
     vehicle = appointment_data.get("vehicle", "your vehicle")
     service = appointment_data.get("service_type", "service")
     date = appointment_data.get("appointment_date", "")
     time = appointment_data.get("appointment_time", "")
-
-    # Normalize phone: add +65 if no country code present
-    if phone and not phone.startswith("+"):
-        phone = "+65" + phone.lstrip("0")
-
-    # --- SMS ---
-    client = get_twilio_client()
-    if client and TWILIO_PHONE_NUMBER and phone:
-        try:
-            sms_body = (
-                f"Hi {name}! Your {service} appointment for {vehicle} "
-                f"is confirmed for {date} at {time}. "
-                f"Ref: {appointment_id[:8]}. "
-                f"You'll receive reminders 24h, 3h, and 1h before. "
-                f"- ABC Car Service Center"
-            )
-            client.messages.create(body=sms_body, from_=TWILIO_PHONE_NUMBER, to=phone)
-            logger.info(f"Confirmation SMS sent to {phone}")
-        except Exception as e:
-            logger.error(f"SMS confirmation failed: {e}")
 
     # --- Email (SMTP) ---
     if email:
